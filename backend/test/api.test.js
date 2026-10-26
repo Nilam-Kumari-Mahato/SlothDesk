@@ -30,23 +30,38 @@ test('rejects malformed or schema-invalid model JSON', () => {
 
 test('normalizes common Gemma task and summary response variations before strict validation', () => {
   const task = normalizeTaskResult({
-    tasks: [{ id: 1, title: 'Submit assignment', priority: 'High', deadline: 'tomorrow', reason: 'Soon', nextAction: null }],
-  });
+    tasks: [{ id: 1, title: '', priority: 'High', deadline: 'tomorrow', reason: 'Soon', nextAction: null }],
+  }, 'Submit assignment tomorrow, fix login bug by Friday, and read API documentation this week.');
   assert.equal(taskResultSchema.safeParse(task).success, true);
+  assert.equal(task.tasks.length, 3);
   assert.equal(task.tasks[0].id, '1');
   assert.equal(task.tasks[0].deadline, null);
   assert.equal(task.tasks[0].deadlineText, 'tomorrow');
   assert.equal(task.tasks[0].priority, 'high');
+  assert.equal(task.tasks[1].priority, 'medium');
+  assert.ok(task.clarifications.some((entry) => entry.includes('preserved from your input')));
 
   const missingTitle = normalizeTaskResult({ tasks: [{ title: '', priority: 'medium' }] }, 'Fix login bug tomorrow');
   assert.equal(taskResultSchema.safeParse(missingTitle).success, true);
   assert.equal(missingTitle.tasks[0].title, 'Fix login bug tomorrow');
   assert.equal(missingTitle.clarifications.length, 1);
 
-  const summary = normalizeSummaryResult({ mainIdea: 'The key message.', dates: ['by Friday'], actions: ['Submit the form'] });
+  const summary = normalizeSummaryResult({
+    overview: 'The key message.', bullets: [{ point: 'The team approved the plan.' }],
+    importantDates: [{ description: 'Review due by Friday' }], todoItems: [{ description: 'Submit the form' }],
+  });
   assert.equal(summaryResultSchema.safeParse(summary).success, true);
-  assert.deepEqual(summary.datesAndDeadlines, [{ text: 'by Friday', date: null }]);
+  assert.deepEqual(summary.keyPoints, ['The team approved the plan.']);
+  assert.deepEqual(summary.datesAndDeadlines, [{ text: 'Review due by Friday', date: null }]);
   assert.deepEqual(summary.actionItems, [{ task: 'Submit the form', deadline: null }]);
+
+  const textSummary = parseModelJson('"A concise summary returned as plain JSON text."', summaryResultSchema, normalizeSummaryResult);
+  assert.equal(textSummary.summary, 'A concise summary returned as plain JSON text.');
+  assert.deepEqual(textSummary.actionItems, []);
+  const nestedSummary = parseModelJson('"{\\"mainIdea\\":\\"A plan was approved.\\",\\"summary\\":\\"The plan was approved.\\",\\"keyPoints\\":[],\\"datesAndDeadlines\\":[],\\"actionItems\\":[]}"', summaryResultSchema, normalizeSummaryResult);
+  assert.equal(nestedSummary.mainIdea, 'A plan was approved.');
+  const wrappedSummary = normalizeSummaryResult([{ mainIdea: 'A report is due.', summary: 'Submit the report by Friday.', keyPoints: [], datesAndDeadlines: [], actionItems: [] }]);
+  assert.equal(summaryResultSchema.safeParse(wrappedSummary).success, true);
 });
 
 test('health endpoint is public and does not expose configuration', async (t) => {

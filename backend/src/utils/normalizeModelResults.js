@@ -21,12 +21,29 @@ function normalizeDate(value) {
   return null;
 }
 
+function splitSourceTasks(text) {
+  const action = '(?:submit|fix|read|send|write|review|call|email|finish|pay|schedule|prepare|update|complete|book|create|check|reply|meet|buy|file|renew|ask|plan|test|deploy|organize|study|present|discuss|confirm|launch|deliver|attend|research|draft|share|install|remove|cancel|follow)';
+  return text.split(new RegExp(`[,;\\n]+|\\s+(?:and|then)\\s+(?=(?:to\\s+)?${action}\\b)`, 'i'))
+    .map((part) => part.trim().replace(/^(?:and|then)\s+/i, '').replace(/[.!?]+$/, '').trim())
+    .filter(Boolean);
+}
+
+function matchingTaskTitle(candidate, title) {
+  const words = (value) => new Set(value.toLowerCase().match(/[a-z0-9]{3,}/g) || []);
+  const candidateWords = words(candidate);
+  const titleWords = words(title);
+  if (!candidateWords.size || !titleWords.size) return false;
+  let overlap = 0;
+  for (const word of candidateWords) if (titleWords.has(word)) overlap += 1;
+  return overlap / candidateWords.size >= 0.34;
+}
+
 export function normalizeTaskResult(value, sourceText = '') {
   const sourceTasks = Array.isArray(value) ? value : value?.tasks ?? value?.prioritizedTasks ?? value?.priorities;
   if (!Array.isArray(sourceTasks)) return value;
   const tasks = sourceTasks;
   let usedSourceTitle = false;
-  const sourceTitles = typeof sourceText === 'string' ? sourceText.split(/[,;\n]+/).map((part) => part.trim()).filter(Boolean) : [];
+  const sourceTitles = typeof sourceText === 'string' ? splitSourceTasks(sourceText) : [];
   const normalizedTasks = tasks.map((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
     const priority = normalizeLevel(item.priority ?? item.priorityLevel, 'medium');
@@ -58,6 +75,25 @@ export function normalizeTaskResult(value, sourceText = '') {
       deadlineType,
     };
   });
+  let recoveredTaskCount = 0;
+  for (const sourceTitle of sourceTitles) {
+    if (normalizedTasks.some((task) => task && typeof task.title === 'string' && matchingTaskTitle(sourceTitle, task.title))) continue;
+    const index = normalizedTasks.length;
+    const deadlineMatch = sourceTitle.match(/\b(?:today|tomorrow|tonight|this week|next week|by\s+(?:\w+\s+)?\w+|before\s+(?:\w+\s+)?\w+|on\s+(?:\w+\s+)?\w+)\b/i);
+    normalizedTasks.push({
+      id: `source-task-${index + 1}`,
+      title: sourceTitle.length > 200 ? `${sourceTitle.slice(0, 197).trimEnd()}...` : sourceTitle,
+      priority: 'medium',
+      deadline: null,
+      deadlineText: deadlineMatch?.[0] || null,
+      importance: 'medium',
+      urgency: 'medium',
+      reason: 'Tentative Medium priority; the AI did not return a separate classification for this task.',
+      nextAction: 'Review this task and choose its priority and next step.',
+      deadlineType: deadlineMatch ? 'explicit' : 'none',
+    });
+    recoveredTaskCount += 1;
+  }
   const summary = cleanString(value?.summary ?? value?.overview)
     || `${normalizedTasks.length} task${normalizedTasks.length === 1 ? '' : 's'} identified and sorted by priority.`;
   const clarifications = value?.clarifications ?? value?.questions ?? [];
@@ -67,31 +103,57 @@ export function normalizeTaskResult(value, sourceText = '') {
     clarifications: [
       ...(Array.isArray(clarifications) ? clarifications.filter((entry) => typeof entry === 'string') : []),
       ...(usedSourceTitle ? ['The AI omitted a task title; the displayed title uses wording from your input. Review this task.'] : []),
-      ...(sourceTitles.length > normalizedTasks.length ? ['The input may contain more tasks than the AI returned; verify that the list is complete.'] : []),
+      ...(recoveredTaskCount ? [`${recoveredTaskCount} task${recoveredTaskCount === 1 ? ' was' : 's were'} preserved from your input without a separate AI classification. Review the tentative priorities.`] : []),
     ],
   };
 }
 
 export function normalizeSummaryResult(value) {
-  const mainIdea = cleanString(value?.mainIdea ?? value?.main_idea ?? value?.centralIdea);
-  const summary = cleanString(value?.summary ?? value?.overview) || mainIdea;
-  const rawPoints = value?.keyPoints ?? value?.key_points ?? value?.points ?? [];
-  const rawDates = value?.datesAndDeadlines ?? value?.dates ?? value?.deadlines ?? [];
-  const rawActions = value?.actionItems ?? value?.action_items ?? value?.actions ?? [];
+  if (Array.isArray(value) && value.length === 1 && value[0] && typeof value[0] === 'object' && !Array.isArray(value[0])) {
+    return normalizeSummaryResult(value[0]);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const text = value.trim();
+    return {
+      mainIdea: text.slice(0, 1200),
+      summary: text.slice(0, 8000),
+      keyPoints: [],
+      datesAndDeadlines: [],
+      actionItems: [],
+    };
+  }
+  if (Array.isArray(value) && value.length && value.every((item) => typeof item === 'string')) {
+    const points = value.map((item) => item.trim()).filter(Boolean);
+    return {
+      mainIdea: (points[0] || '').slice(0, 1200),
+      summary: points.join(' ').slice(0, 8000),
+      keyPoints: points.slice(0, 50).map((point) => point.slice(0, 1200)),
+      datesAndDeadlines: [],
+      actionItems: [],
+    };
+  }
+  const rawPoints = value?.keyPoints ?? value?.key_points ?? value?.points ?? value?.bullets ?? [];
+  const rawDates = value?.datesAndDeadlines ?? value?.dates_and_deadlines ?? value?.importantDates ?? value?.dates ?? value?.deadlines ?? [];
+  const rawActions = value?.actionItems ?? value?.action_items ?? value?.todoItems ?? value?.actions ?? [];
+  const keyPoints = Array.isArray(rawPoints)
+    ? rawPoints.map((point) => typeof point === 'string' ? point.trim() : cleanString(point?.text ?? point?.point ?? point?.detail)).filter(Boolean)
+    : [];
+  const summary = cleanString(value?.summary ?? value?.overview) || keyPoints.join(' ');
+  const mainIdea = cleanString(value?.mainIdea ?? value?.main_idea ?? value?.centralIdea ?? value?.headline) || summary;
   return {
     mainIdea: mainIdea || summary,
     summary,
-    keyPoints: Array.isArray(rawPoints) ? rawPoints.map((point) => typeof point === 'string' ? point.trim() : '').filter(Boolean) : [],
+    keyPoints,
     datesAndDeadlines: Array.isArray(rawDates) ? rawDates.map((entry) => {
       if (typeof entry === 'string') return { text: entry.trim(), date: null };
       if (!entry || typeof entry !== 'object') return null;
-      const text = cleanString(entry.text ?? entry.label ?? entry.value);
+      const text = cleanString(entry.text ?? entry.label ?? entry.value ?? entry.description ?? entry.dateText ?? entry.date);
       return text ? { text, date: normalizeDate(entry.date ?? entry.deadline) } : null;
     }).filter(Boolean) : [],
     actionItems: Array.isArray(rawActions) ? rawActions.map((entry) => {
       if (typeof entry === 'string') return { task: entry.trim(), deadline: null };
       if (!entry || typeof entry !== 'object') return null;
-      const task = cleanString(entry.task ?? entry.text ?? entry.action ?? entry.title);
+      const task = cleanString(entry.task ?? entry.text ?? entry.action ?? entry.title ?? entry.description ?? entry.item);
       return task ? { task, deadline: normalizeDate(entry.deadline ?? entry.date) } : null;
     }).filter(Boolean) : [],
   };
