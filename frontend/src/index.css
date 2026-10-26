@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    font-family: 'Patrick Hand', 'Comic Neue', cursive;
+  }
+
+  body {
+    background-color: #D0E2B9;
+    color: #11110D;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  textarea {
+    resize: none;
+    outline: none;
+    font-family: inherit;
+  }
+
+  button {
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #A38C70 transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: #A38C70;
+    border-radius: 3px;
+  }
+}
